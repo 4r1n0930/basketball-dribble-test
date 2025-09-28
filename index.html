@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Control Dribble Test</title>
+  <style>
+    body {font-family: sans-serif; max-width: 900px; margin: auto; padding: 20px; text-align: center; background: #f5f5f5;}
+    h2 {color: #2c3e50;}
+    .video-container {position: relative; max-width: 640px; margin: auto; display: none;}
+    #video {width: 100%; border-radius: 8px; background: #000; transform: scaleX(-1);} /* mirror */
+    #canvas {position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1);} /* mirror canvas too */
+    .counter {font-size: 1.5rem; font-weight: bold; color: #2c3e50; margin-top: 20px; white-space: pre-line;}
+    button {background: #3498db; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 1rem; transition: all 0.3s ease;}
+    button:hover {background: #2980b9; transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.2);}
+    #loader {position: fixed; inset: 0; background: #000; display: flex; justify-content: center; align-items: center; z-index: 9999;}
+    #loadingVideo {width: 80%; height: 60%; object-fit: cover; border-radius: 12px; max-width: 600px;}
+    
+    /* Score Display Styles */
+    .score-display {display: none; padding: 30px; border-radius: 12px; margin: 20px auto; max-width: 500px; box-shadow: 0 6px 20px rgba(0,0,0,0.15);}
+    .excellent {background: linear-gradient(135deg, #4CAF50, #45a049); color: white;}
+    .good {background: linear-gradient(135deg, #FF9800, #F57C00); color: white;}
+    .improve {background: linear-gradient(135deg, #f44336, #d32f2f); color: white;}
+    .score-icon {font-size: 4rem; margin-bottom: 15px;}
+    .score-title {font-size: 2rem; font-weight: bold; margin-bottom: 15px;}
+    .score-message {font-size: 1.2rem; margin-bottom: 20px;}
+    
+    /* Confetti container */
+    #confetti-container {position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1000; display: none;}
+    
+    /* Loading optimization */
+    .loading-text {color: white; font-size: 1.2rem; margin-top: 20px;}
+    #loader-content {text-align: center;}
+  </style>
+</head>
+<body>
+  <!-- Loader with video -->
+  <div id="loader">
+    <div id="loader-content">
+      <video autoplay muted playsinline id="loadingVideo">
+        <source src="video.mp4" type="video/mp4">
+        Your browser does not support the video tag.
+      </video>
+      <div class="loading-text">Loading AI Model...</div>
+    </div>
+  </div>
+
+  <!-- Confetti container -->
+  <div id="confetti-container"></div>
+
+  <!-- Main app -->
+  <div id="app" style="display:none;">
+    <h2>Control Dribble Test</h2>
+    <div class="video-container" id="video-container">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="canvas"></canvas>
+    </div>
+    <button onclick="startTest()">Start Test</button>
+    <div class="counter" id="status">Press "Start Test" to begin</div>
+    
+    <!-- Score displays -->
+    <div id="excellent-score" class="score-display excellent">
+      <div class="score-icon">✅</div>
+      <div class="score-title">Excellent!</div>
+      <div class="score-message">Outstanding performance! Your dribbling technique is impressive.</div>
+    </div>
+    
+    <div id="good-score" class="score-display good">
+      <div class="score-icon">👍</div>
+      <div class="score-title">Good Job!</div>
+      <div class="score-message">Solid performance! With a bit more practice, you'll be excellent.</div>
+    </div>
+    
+    <div id="improve-score" class="score-display improve">
+      <div class="score-icon">💪</div>
+      <div class="score-title">You Can Do Better!</div>
+      <div class="score-message">Keep practicing! Focus on your form and try again.</div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+  <script>
+    const video = document.getElementById("video"),
+          canvas = document.getElementById("canvas"),
+          ctx = canvas.getContext("2d"),
+          statusEl = document.getElementById("status"),
+          loader = document.getElementById("loader"),
+          app = document.getElementById("app"),
+          videoContainer = document.getElementById("video-container"),
+          loadingVideo = document.getElementById("loadingVideo"),
+          confettiContainer = document.getElementById("confetti-container"),
+          excellentScore = document.getElementById("excellent-score"),
+          goodScore = document.getElementById("good-score"),
+          improveScore = document.getElementById("improve-score");
+
+    let detector, testActive = false, countdownTimer, detectionLoop;
+    let modelReady = false, videoDone = false;
+    let timeLeft = 30;
+
+    // Metrics tracking
+    let dribbleCount = 0;
+    let lastWristY = {left: null, right: null};
+    let distSum = 0, distCount = 0, hipVisible = false;
+    let elbowGoodFrames = 0, totalFrames = 0;
+
+    const skeleton = [
+      ["left_shoulder","right_shoulder"],["left_shoulder","left_elbow"],["left_elbow","left_wrist"],
+      ["right_shoulder","right_elbow"],["right_elbow","right_wrist"],["left_hip","right_hip"],
+      ["left_hip","left_knee"],["left_knee","left_ankle"],["right_hip","right_knee"],["right_knee","right_ankle"]
+    ];
+    const faceParts = ["nose", "left_eye", "right_eye", "left_ear", "right_ear"];
+
+    const angle=(A,B,C)=> {
+      const AB={x:B.x-A.x,y:B.y-A.y}, CB={x:B.x-C.x,y:B.y-C.y};
+      const dot=AB.x*CB.x+AB.y*CB.y, magAB=Math.hypot(AB.x,AB.y), magCB=Math.hypot(CB.x,CB.y);
+      return Math.acos(dot/(magAB*magCB))*180/Math.PI;
+    };
+
+    async function init() {
+      if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
+        await tf.setBackend("wasm");
+      }
+
+      video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+      await new Promise(r => video.onloadedmetadata = r);
+      canvas.width = video.videoWidth; 
+      canvas.height = video.videoHeight;
+
+      detector = await poseDetection.createDetector(
+        poseDetection.SupportedModels.MoveNet,
+        { modelType: "SinglePose.Lightning" }
+      );
+      await detector.estimatePoses(video); // warm-up
+
+      modelReady = true;
+      tryStartApp();
+    }
+
+    function startTest() {
+      if (testActive) return;
+      
+      // Hide any previous score displays
+      excellentScore.style.display = "none";
+      goodScore.style.display = "none";
+      improveScore.style.display = "none";
+      videoContainer.style.display = "block";
+      
+      let preTime = 3;
+      statusEl.textContent = "Ready";
+
+      const preTimer = setInterval(() => {
+        if (preTime === 3) statusEl.textContent = "Ready";
+        if (preTime === 2) statusEl.textContent = "Set";
+        if (preTime === 1) statusEl.textContent = "Go!";
+        preTime--;
+
+        if (preTime === 0) {
+          clearInterval(preTimer);
+          beginMainTest();
+        }
+      }, 1000);
+    }
+
+    function beginMainTest() {
+      testActive = true;
+      timeLeft = 30;
+
+      // Reset metrics
+      dribbleCount = 0;
+      lastWristY = {left: null, right: null};
+      distSum = 0; distCount = 0; hipVisible = false;
+      elbowGoodFrames = 0; totalFrames = 0;
+
+      statusEl.textContent = `⏱️ Time left: ${timeLeft}s`;
+
+      countdownTimer = setInterval(() => {
+        timeLeft--;
+        if (timeLeft > 0) {
+          statusEl.textContent = `⏱️ Time left: ${timeLeft}s`;
+        } else {
+          clearInterval(countdownTimer);
+          testActive = false;
+          stopCamera();
+          videoContainer.style.display = "none"; // hide video container
+          showFinalScore();
+        }
+      }, 1000);
+    }
+
+    function stopCamera() {
+      const tracks = video.srcObject?.getTracks();
+      if (tracks) tracks.forEach(track => track.stop());
+    }
+
+    function showFinalScore() {
+      // Frequency score (max 40)
+      let freqScore = Math.min(40, (dribbleCount/60)*40);
+
+      // Distance score (max 30) – if no hip visible, score = 0
+      let distScore = 0;
+      if (hipVisible && distCount > 0) {
+        let avgDist = distSum/distCount;
+        distScore = Math.max(0, Math.min(30, (0.5/avgDist)*30));
+      }
+
+      // Elbow angle score (max 30)
+      let elbowScore = totalFrames > 0 ? (elbowGoodFrames/totalFrames)*30 : 0;
+
+      let finalScore = Math.round(freqScore + distScore + elbowScore);
+
+      // Show appropriate score display
+      if (finalScore >= 80) {
+        showExcellentScore(finalScore, freqScore, distScore, elbowScore);
+      } else if (finalScore >= 60) {
+        showGoodScore(finalScore, freqScore, distScore, elbowScore);
+      } else {
+        showImproveScore(finalScore, freqScore, distScore, elbowScore);
+      }
+    }
+
+    function showExcellentScore(finalScore, freqScore, distScore, elbowScore) {
+      statusEl.textContent = "";
+      excellentScore.style.display = "block";
+      createConfetti();
+      
+      // Add detailed score breakdown
+      const breakdown = document.createElement("div");
+      breakdown.style.marginTop = "15px";
+      breakdown.style.fontSize = "0.9rem";
+      breakdown.style.opacity = "0.9";
+      breakdown.innerHTML = `Score: ${finalScore}/100<br>Frequency: ${freqScore.toFixed(1)}/40 | Allignment: ${distScore.toFixed(1)}/30 | Form: ${elbowScore.toFixed(1)}/30`;
+      excellentScore.appendChild(breakdown);
+    }
+
+    function showGoodScore(finalScore, freqScore, distScore, elbowScore) {
+      statusEl.textContent = "";
+      goodScore.style.display = "block";
+      
+      // Add detailed score breakdown
+      const breakdown = document.createElement("div");
+      breakdown.style.marginTop = "15px";
+      breakdown.style.fontSize = "0.9rem";
+      breakdown.style.opacity = "0.9";
+      breakdown.innerHTML = `Score: ${finalScore}/100<br>Frequency: ${freqScore.toFixed(1)}/40 | Allignment: ${distScore.toFixed(1)}/30 | Form: ${elbowScore.toFixed(1)}/30`;
+      goodScore.appendChild(breakdown);
+    }
+
+    function showImproveScore(finalScore, freqScore, distScore, elbowScore) {
+      statusEl.textContent = "";
+      improveScore.style.display = "block";
+      
+      // Add detailed score breakdown
+      const breakdown = document.createElement("div");
+      breakdown.style.marginTop = "15px";
+      breakdown.style.fontSize = "0.9rem";
+      breakdown.style.opacity = "0.9";
+      breakdown.innerHTML = `Score: ${finalScore}/100<br>Frequency: ${freqScore.toFixed(1)}/40 | Allignment: ${distScore.toFixed(1)}/30 | Form: ${elbowScore.toFixed(1)}/30`;
+      improveScore.appendChild(breakdown);
+    }
+
+    function createConfetti() {
+      confettiContainer.style.display = "block";
+      const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff'];
+      
+      for (let i = 0; i < 150; i++) {
+        const confetti = document.createElement('div');
+        confetti.style.position = 'absolute';
+        confetti.style.width = '10px';
+        confetti.style.height = '10px';
+        confetti.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+        confetti.style.borderRadius = Math.random() > 0.5 ? '50%' : '0';
+        confetti.style.left = Math.random() * 100 + 'vw';
+        confetti.style.top = '-10px';
+        confetti.style.opacity = '0.8';
+        
+        const animation = confetti.animate([
+          { transform: `translateY(0) rotate(0deg)`, opacity: 1 },
+          { transform: `translateY(100vh) rotate(${Math.random() * 360}deg)`, opacity: 0 }
+        ], {
+          duration: 2000 + Math.random() * 3000,
+          easing: 'cubic-bezier(0.1, 0.2, 0.8, 0.9)'
+        });
+        
+        confettiContainer.appendChild(confetti);
+        
+        animation.onfinish = () => {
+          confetti.remove();
+        };
+      }
+      
+      // Hide confetti container after animation
+      setTimeout(() => {
+        confettiContainer.style.display = "none";
+        confettiContainer.innerHTML = "";
+      }, 5000);
+    }
+
+    function drawVideo(){
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.drawImage(video,0,0,canvas.width,canvas.height);
+
+      if(window.latestKeypoints){
+        const keypoints = window.latestKeypoints;
+        keypoints.forEach(k=>{
+          if(k.score>0.4 && !faceParts.includes(k.name)){
+            ctx.beginPath(); ctx.arc(k.x,k.y,5,0,2*Math.PI);
+            ctx.fillStyle="white"; ctx.fill();
+          }
+        });
+        skeleton.forEach(([a,b])=>{
+          const kp1=keypoints.find(k=>k.name===a), kp2=keypoints.find(k=>k.name===b);
+          if(kp1?.score>0.4 && kp2?.score>0.4){
+            ctx.beginPath(); ctx.moveTo(kp1.x,kp1.y); ctx.lineTo(kp2.x,kp2.y);
+            ctx.strokeStyle="pink"; ctx.lineWidth=2; ctx.stroke();
+          }
+        });
+      }
+      requestAnimationFrame(drawVideo);
+    }
+
+    async function runDetection(){
+      if(!detector || !testActive) return;
+      const poses=await detector.estimatePoses(video);
+      if(poses.length){
+        const k=poses[0].keypoints;
+        window.latestKeypoints=k;
+
+        // Wrist dribble detection
+        ["left","right"].forEach(side=>{
+          const wrist=k.find(pt=>pt.name===side+"_wrist");
+          if(wrist && wrist.score>0.4){
+            if(lastWristY[side]!==null && (wrist.y-lastWristY[side])>20){
+              dribbleCount++;
+            }
+            lastWristY[side]=wrist.y;
+          }
+        });
+
+        // Distance wrists to hips
+        const leftWrist=k.find(pt=>pt.name==="left_wrist"),
+              rightWrist=k.find(pt=>pt.name==="right_wrist"),
+              leftHip=k.find(pt=>pt.name==="left_hip"),
+              rightHip=k.find(pt=>pt.name==="right_hip");
+
+        if(leftHip?.score>0.4 || rightHip?.score>0.4) {
+          hipVisible = true; // at least one hip detected
+          if(leftWrist?.score>0.4 && leftHip?.score>0.4){
+            distSum+=Math.abs(leftWrist.x-leftHip.x)/100; distCount++;
+          }
+          if(rightWrist?.score>0.4 && rightHip?.score>0.4){
+            distSum+=Math.abs(rightWrist.x-rightHip.x)/100; distCount++;
+          }
+        }
+
+        // Elbow angle check
+        const leftShoulder=k.find(pt=>pt.name==="left_shoulder"),
+              rightShoulder=k.find(pt=>pt.name==="right_shoulder"),
+              leftElbow=k.find(pt=>pt.name==="left_elbow"),
+              rightElbow=k.find(pt=>pt.name==="right_elbow");
+        if(leftShoulder&&leftElbow&&leftWrist&&[leftShoulder,leftElbow,leftWrist].every(p=>p.score>0.4)){
+          let ang=angle(leftShoulder,leftElbow,leftWrist);
+          if(ang>=72 && ang<=108) elbowGoodFrames++;
+        }
+        if(rightShoulder&&rightElbow&&rightWrist&&[rightShoulder,rightElbow,rightWrist].every(p=>p.score>0.4)){
+          let ang=angle(rightShoulder,rightElbow,rightWrist);
+          if(ang>=72 && ang<=108) elbowGoodFrames++;
+        }
+        totalFrames++;
+      }
+    }
+
+    function tryStartApp() {
+      if(modelReady && videoDone) {
+        loader.style.display = "none";
+        app.style.display = "block";
+        videoContainer.style.display = "block";
+        requestAnimationFrame(drawVideo);
+        detectionLoop = setInterval(runDetection, 150);
+      }
+    }
+
+    // Loading optimization
+    loadingVideo.addEventListener("ended", () => {
+      videoDone = true;
+      tryStartApp();
+    });
+
+    // Fallback if video doesn't load
+    setTimeout(() => {
+      if (!videoDone && !modelReady) {
+        document.querySelector('.loading-text').textContent = "Loading taking longer than expected...";
+      }
+    }, 8000);
+
+    // Start initialization
+    init();
+  </script>
+</body>
+</html>
