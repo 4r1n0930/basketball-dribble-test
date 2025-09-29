@@ -10,11 +10,27 @@
     #video {width: 100%; border-radius: 8px; background: #000; transform: scaleX(-1);} /* mirror */
     #canvas {position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1);} /* mirror canvas too */
     .counter {font-size: 1.5rem; font-weight: bold; color: #2c3e50; margin-top: 20px; white-space: pre-line;}
-    button {background: #3498db; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 1rem; transition: all 0.3s ease;}
+    button {background: #3498db; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 1rem; transition: all 0.3s ease;margin-top:20px;}
     button:hover {background: #2980b9; transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.2);}
     #loader {position: fixed; inset: 0; background: #000; display: flex; justify-content: center; align-items: center; z-index: 9999;}
-    #loadingVideo {width: 80%; height: 60%; object-fit: cover; border-radius: 12px; max-width: 600px;}
-    
+     .instructions {
+            text-align: left;
+            background-color: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+        .instructions h3 {
+            margin-top: 0;
+            color: #2c3e50;
+        }
+        .instructions ul {
+            padding-left: 20px;
+        }
+        .instructions li {
+            margin-bottom: 8px;
+        }
     /* Score Display Styles */
     .score-display {display: none; padding: 30px; border-radius: 12px; margin: 20px auto; max-width: 500px; box-shadow: 0 6px 20px rgba(0,0,0,0.15);}
     .excellent {background: linear-gradient(135deg, #4CAF50, #45a049); color: white;}
@@ -36,10 +52,16 @@
   <!-- Loader with video -->
   <div id="loader">
     <div id="loader-content">
-      <video autoplay muted playsinline id="loadingVideo">
-        <source src="video.mp4" type="video/mp4">
-        Your browser does not support the video tag.
-      </video>
+           <div class="instructions">
+            <h3>How to use:</h3>
+            <ul>
+                <li>Allow camera access when prompted</li>
+                <li>Stand facing the camera with your full body visible</li>
+                <li>Perform squats by bending your knees and lowering your hips</li>
+                <li>Return to standing position to count a repetition</li>
+                <li>Make sure you have good lighting for better detection</li>
+            </ul>
+        </div>
       <div class="loading-text">Loading AI Model...</div>
     </div>
   </div>
@@ -80,320 +102,347 @@
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
   <script>
-    const video = document.getElementById("video"),
-          canvas = document.getElementById("canvas"),
-          ctx = canvas.getContext("2d"),
-          statusEl = document.getElementById("status"),
-          loader = document.getElementById("loader"),
-          app = document.getElementById("app"),
-          videoContainer = document.getElementById("video-container"),
-          loadingVideo = document.getElementById("loadingVideo"),
-          confettiContainer = document.getElementById("confetti-container"),
-          excellentScore = document.getElementById("excellent-score"),
-          goodScore = document.getElementById("good-score"),
-          improveScore = document.getElementById("improve-score");
+   const video = document.getElementById("video"),
+      canvas = document.getElementById("canvas"),
+      ctx = canvas.getContext("2d"),
+      statusEl = document.getElementById("status"),
+      loader = document.getElementById("loader"),
+      app = document.getElementById("app"),
+      videoContainer = document.getElementById("video-container"),
+      instructions = document.getElementsByClassName("instructions"),
+      confettiContainer = document.getElementById("confetti-container"),
+      excellentScore = document.getElementById("excellent-score"),
+      goodScore = document.getElementById("good-score"),
+      improveScore = document.getElementById("improve-score");
 
-    let detector, testActive = false, countdownTimer, detectionLoop;
-    let modelReady = false, videoDone = false;
-    let timeLeft = 30;
+let detector, testActive = false, countdownTimer, detectionLoop;
+let modelReady = false, videoDone = false;
+let timeLeft = 30;
 
-    // Metrics tracking
-    let dribbleCount = 0;
-    let lastWristY = {left: null, right: null};
-    let distSum = 0, distCount = 0, hipVisible = false;
-    let elbowGoodFrames = 0, totalFrames = 0;
+// Metrics tracking
+let dribbleCount = 0;
+let lastWristY = {left: null, right: null};
+let distSum = 0, distCount = 0, hipVisible = false;
+let goodFormDribbles = 0; // Track dribbles with good form
 
-    const skeleton = [
-      ["left_shoulder","right_shoulder"],["left_shoulder","left_elbow"],["left_elbow","left_wrist"],
-      ["right_shoulder","right_elbow"],["right_elbow","right_wrist"],["left_hip","right_hip"],
-      ["left_hip","left_knee"],["left_knee","left_ankle"],["right_hip","right_knee"],["right_knee","right_ankle"]
-    ];
-    const faceParts = ["nose", "left_eye", "right_eye", "left_ear", "right_ear"];
+const skeleton = [
+  ["left_shoulder","right_shoulder"],["left_shoulder","left_elbow"],["left_elbow","left_wrist"],
+  ["right_shoulder","right_elbow"],["right_elbow","right_wrist"],["left_hip","right_hip"],
+  ["left_hip","left_knee"],["left_knee","left_ankle"],["right_hip","right_knee"],["right_knee","right_ankle"]
+];
+const faceParts = ["nose", "left_eye", "right_eye", "left_ear", "right_ear"];
 
-    const angle=(A,B,C)=> {
-      const AB={x:B.x-A.x,y:B.y-A.y}, CB={x:B.x-C.x,y:B.y-C.y};
-      const dot=AB.x*CB.x+AB.y*CB.y, magAB=Math.hypot(AB.x,AB.y), magCB=Math.hypot(CB.x,CB.y);
-      return Math.acos(dot/(magAB*magCB))*180/Math.PI;
-    };
+const angle=(A,B,C)=> {
+  const AB={x:B.x-A.x,y:B.y-A.y}, CB={x:B.x-C.x,y:B.y-C.y};
+  const dot=AB.x*CB.x+AB.y*CB.y, magAB=Math.hypot(AB.x,AB.y), magCB=Math.hypot(CB.x,CB.y);
+  return Math.acos(dot/(magAB*magCB))*180/Math.PI;
+};
 
-    async function init() {
-      if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
-        await tf.setBackend("wasm");
-      }
+async function init() {
+  if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
+    await tf.setBackend("wasm");
+  }
 
-      video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
-      await new Promise(r => video.onloadedmetadata = r);
-      canvas.width = video.videoWidth; 
-      canvas.height = video.videoHeight;
+  video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+  await new Promise(r => video.onloadedmetadata = r);
+  canvas.width = video.videoWidth; 
+  canvas.height = video.videoHeight;
 
-      detector = await poseDetection.createDetector(
-        poseDetection.SupportedModels.MoveNet,
-        { modelType: "SinglePose.Lightning" }
-      );
-      await detector.estimatePoses(video); // warm-up
+  detector = await poseDetection.createDetector(
+    poseDetection.SupportedModels.MoveNet,
+    { modelType: "SinglePose.Lightning" }
+  );
+  await detector.estimatePoses(video); // warm-up
 
-      modelReady = true;
-      tryStartApp();
+  modelReady = true;
+  tryStartApp();
+}
+
+function startTest() {
+  if (testActive) return;
+  
+  // Hide any previous score displays
+  excellentScore.style.display = "none";
+  goodScore.style.display = "none";
+  improveScore.style.display = "none";
+  videoContainer.style.display = "block";
+  
+  let preTime = 3;
+  statusEl.textContent = "Ready";
+
+  const preTimer = setInterval(() => {
+    if (preTime === 3) statusEl.textContent = "Ready";
+    if (preTime === 2) statusEl.textContent = "Set";
+    if (preTime === 1) statusEl.textContent = "Go!";
+    preTime--;
+
+    if (preTime === 0) {
+      clearInterval(preTimer);
+      beginMainTest();
     }
+  }, 1000);
+}
 
-    function startTest() {
-      if (testActive) return;
-      
-      // Hide any previous score displays
-      excellentScore.style.display = "none";
-      goodScore.style.display = "none";
-      improveScore.style.display = "none";
-      videoContainer.style.display = "block";
-      
-      let preTime = 3;
-      statusEl.textContent = "Ready";
+function beginMainTest() {
+  testActive = true;
+  timeLeft = 30;
 
-      const preTimer = setInterval(() => {
-        if (preTime === 3) statusEl.textContent = "Ready";
-        if (preTime === 2) statusEl.textContent = "Set";
-        if (preTime === 1) statusEl.textContent = "Go!";
-        preTime--;
+  // Reset metrics
+  dribbleCount = 0;
+  lastWristY = {left: null, right: null};
+  distSum = 0; distCount = 0; hipVisible = false;
+  goodFormDribbles = 0; // Reset good form dribbles
 
-        if (preTime === 0) {
-          clearInterval(preTimer);
-          beginMainTest();
-        }
-      }, 1000);
-    }
+  statusEl.textContent = `⏱️ Time left: ${timeLeft}s`;
 
-    function beginMainTest() {
-      testActive = true;
-      timeLeft = 30;
-
-      // Reset metrics
-      dribbleCount = 0;
-      lastWristY = {left: null, right: null};
-      distSum = 0; distCount = 0; hipVisible = false;
-      elbowGoodFrames = 0; totalFrames = 0;
-
+  countdownTimer = setInterval(() => {
+    timeLeft--;
+    if (timeLeft > 0) {
       statusEl.textContent = `⏱️ Time left: ${timeLeft}s`;
-
-      countdownTimer = setInterval(() => {
-        timeLeft--;
-        if (timeLeft > 0) {
-          statusEl.textContent = `⏱️ Time left: ${timeLeft}s`;
-        } else {
-          clearInterval(countdownTimer);
-          testActive = false;
-          stopCamera();
-          videoContainer.style.display = "none"; // hide video container
-          showFinalScore();
-        }
-      }, 1000);
+    } else {
+      clearInterval(countdownTimer);
+      testActive = false;
+      stopCamera();
+      videoContainer.style.display = "none"; // hide video container
+      showFinalScore();
     }
+  }, 1000);
+}
 
-    function stopCamera() {
-      const tracks = video.srcObject?.getTracks();
-      if (tracks) tracks.forEach(track => track.stop());
-    }
+function stopCamera() {
+  const tracks = video.srcObject?.getTracks();
+  if (tracks) tracks.forEach(track => track.stop());
+}
 
-    function showFinalScore() {
-      // Frequency score (max 40)
-      let freqScore = Math.min(40, (dribbleCount/60)*40);
+function showFinalScore() {
+  // Frequency score (max 40)
+  let freqScore = Math.min(40, (dribbleCount/70)*40);
 
-      // Distance score (max 30) – if no hip visible, score = 0
-      let distScore = 0;
-      if (hipVisible && distCount > 0) {
-        let avgDist = distSum/distCount;
-        distScore = Math.max(0, Math.min(30, (0.5/avgDist)*30));
+  // Distance score (max 30) – if no hip visible, score = 0
+  let distScore = 0;
+  if (hipVisible && distCount > 0) {
+    let avgDist = distSum/distCount;
+    distScore = Math.max(0, Math.min(30, (0.3/avgDist)*30));
+  }
+
+  // Form score (max 30) - based on dribble quality instead of frames
+  let formScore = 0;
+  if (dribbleCount > 0) {
+    formScore = (goodFormDribbles / dribbleCount) * 30;
+  }
+
+  let finalScore = Math.round(freqScore + distScore + formScore);
+
+  // Show appropriate score display
+  if (finalScore >= 80) {
+    showExcellentScore(finalScore, freqScore, distScore, formScore);
+  } else if (finalScore >= 60) {
+    showGoodScore(finalScore, freqScore, distScore, formScore);
+  } else {
+    showImproveScore(finalScore, freqScore, distScore, formScore);
+  }
+}
+
+function showExcellentScore(finalScore, freqScore, distScore, formScore) {
+  statusEl.textContent = "";
+  excellentScore.style.display = "block";
+  createConfetti();
+  
+  // Update button to "Home"
+  const startAgainBtn = document.getElementById("start-again");
+  if (startAgainBtn) {
+    startAgainBtn.textContent = "Home";
+    startAgainBtn.onclick = () => {
+      window.location.href = "basketball_tests.html";
+    };
+  }
+  
+  // Add detailed score breakdown
+  const breakdown = document.createElement("div");
+  breakdown.style.marginTop = "15px";
+  breakdown.style.fontSize = "0.9rem";
+  breakdown.style.opacity = "0.9";
+  breakdown.innerHTML = `Score: ${finalScore}/100<br>Frequency: ${freqScore.toFixed(1)}/40 | Allignment: ${distScore.toFixed(1)}/30 | Form: ${formScore.toFixed(1)}/30`;
+  excellentScore.appendChild(breakdown);
+}
+
+function showGoodScore(finalScore, freqScore, distScore, formScore) {
+  statusEl.textContent = "";
+  goodScore.style.display = "block";
+  
+  // Update button to "Home"
+  const startAgainBtn = document.getElementById("start-again");
+  if (startAgainBtn) {
+    startAgainBtn.textContent = "Home";
+    startAgainBtn.onclick = () => {
+      window.location.href = "basketball_tests.html";
+    };
+  }
+  
+  // Add detailed score breakdown
+  const breakdown = document.createElement("div");
+  breakdown.style.marginTop = "15px";
+  breakdown.style.fontSize = "0.9rem";
+  breakdown.style.opacity = "0.9";
+  breakdown.innerHTML = `Score: ${finalScore}/100<br>Frequency: ${freqScore.toFixed(1)}/40 | Allignment: ${distScore.toFixed(1)}/30 | Form: ${formScore.toFixed(1)}/30`;
+  goodScore.appendChild(breakdown);
+}
+
+function showImproveScore(finalScore, freqScore, distScore, formScore) {
+  statusEl.textContent = "";
+  improveScore.style.display = "block";
+  
+  // Update button to "Home"
+  const startAgainBtn = document.getElementById("start-again");
+  if (startAgainBtn) {
+    startAgainBtn.textContent = "Home";
+    startAgainBtn.onclick = () => {
+      window.location.href = "basketball_tests.html";
+    };
+  }
+  
+  // Add detailed score breakdown
+  const breakdown = document.createElement("div");
+  breakdown.style.marginTop = "15px";
+  breakdown.style.fontSize = "0.9rem";
+  breakdown.style.opacity = "0.9";
+  breakdown.innerHTML = `Score: ${finalScore}/100<br>Frequency: ${freqScore.toFixed(1)}/40 | Allignment: ${distScore.toFixed(1)}/30 | Form: ${formScore.toFixed(1)}/30`;
+  improveScore.appendChild(breakdown);
+}
+
+function createConfetti() {
+  confettiContainer.style.display = "block";
+  const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff'];
+  
+  for (let i = 0; i < 150; i++) {
+    const confetti = document.createElement('div');
+    confetti.style.position = 'absolute';
+    confetti.style.width = '10px';
+    confetti.style.height = '10px';
+    confetti.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+    confetti.style.borderRadius = Math.random() > 0.5 ? '50%' : '0';
+    confetti.style.left = Math.random() * 100 + 'vw';
+    confetti.style.top = '-10px';
+    confetti.style.opacity = '0.8';
+    
+    const animation = confetti.animate([
+      { transform: `translateY(0) rotate(0deg)`, opacity: 1 },
+      { transform: `translateY(100vh) rotate(${Math.random() * 360}deg)`, opacity: 0 }
+    ], {
+      duration: 2000 + Math.random() * 3000,
+      easing: 'cubic-bezier(0.1, 0.2, 0.8, 0.9)'
+    });
+    
+    confettiContainer.appendChild(confetti);
+    
+    animation.onfinish = () => {
+      confetti.remove();
+    };
+  }
+  
+  // Hide confetti container after animation
+  setTimeout(() => {
+    confettiContainer.style.display = "none";
+    confettiContainer.innerHTML = "";
+  }, 5000);
+}
+
+function drawVideo(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(video,0,0,canvas.width,canvas.height);
+
+  if(window.latestKeypoints){
+    const keypoints = window.latestKeypoints;
+    keypoints.forEach(k=>{
+      if(k.score>0.4 && !faceParts.includes(k.name)){
+        ctx.beginPath(); ctx.arc(k.x,k.y,5,0,2*Math.PI);
+        ctx.fillStyle="white"; ctx.fill();
       }
-
-      // Elbow angle score (max 30)
-      let elbowScore = totalFrames > 0 ? (elbowGoodFrames/totalFrames)*30 : 0;
-
-      let finalScore = Math.round(freqScore + distScore + elbowScore);
-
-      // Show appropriate score display
-      if (finalScore >= 80) {
-        showExcellentScore(finalScore, freqScore, distScore, elbowScore);
-      } else if (finalScore >= 60) {
-        showGoodScore(finalScore, freqScore, distScore, elbowScore);
-      } else {
-        showImproveScore(finalScore, freqScore, distScore, elbowScore);
+    });
+    skeleton.forEach(([a,b])=>{
+      const kp1=keypoints.find(k=>k.name===a), kp2=keypoints.find(k=>k.name===b);
+      if(kp1?.score>0.4 && kp2?.score>0.4){
+        ctx.beginPath(); ctx.moveTo(kp1.x,kp1.y); ctx.lineTo(kp2.x,kp2.y);
+        ctx.strokeStyle="pink"; ctx.lineWidth=2; ctx.stroke();
       }
-    }
+    });
+  }
+  requestAnimationFrame(drawVideo);
+}
 
-    function showExcellentScore(finalScore, freqScore, distScore, elbowScore) {
-      statusEl.textContent = "";
-      excellentScore.style.display = "block";
-      createConfetti();
-      
-      // Add detailed score breakdown
-      const breakdown = document.createElement("div");
-      breakdown.style.marginTop = "15px";
-      breakdown.style.fontSize = "0.9rem";
-      breakdown.style.opacity = "0.9";
-      breakdown.innerHTML = `Score: ${finalScore}/100<br>Frequency: ${freqScore.toFixed(1)}/40 | Allignment: ${distScore.toFixed(1)}/30 | Form: ${elbowScore.toFixed(1)}/30`;
-      excellentScore.appendChild(breakdown);
-    }
+async function runDetection(){
+  if(!detector || !testActive) return;
+  const poses=await detector.estimatePoses(video);
+  if(poses.length){
+    const k=poses[0].keypoints;
+    window.latestKeypoints=k;
 
-    function showGoodScore(finalScore, freqScore, distScore, elbowScore) {
-      statusEl.textContent = "";
-      goodScore.style.display = "block";
-      
-      // Add detailed score breakdown
-      const breakdown = document.createElement("div");
-      breakdown.style.marginTop = "15px";
-      breakdown.style.fontSize = "0.9rem";
-      breakdown.style.opacity = "0.9";
-      breakdown.innerHTML = `Score: ${finalScore}/100<br>Frequency: ${freqScore.toFixed(1)}/40 | Allignment: ${distScore.toFixed(1)}/30 | Form: ${elbowScore.toFixed(1)}/30`;
-      goodScore.appendChild(breakdown);
-    }
-
-    function showImproveScore(finalScore, freqScore, distScore, elbowScore) {
-      statusEl.textContent = "";
-      improveScore.style.display = "block";
-      
-      // Add detailed score breakdown
-      const breakdown = document.createElement("div");
-      breakdown.style.marginTop = "15px";
-      breakdown.style.fontSize = "0.9rem";
-      breakdown.style.opacity = "0.9";
-      breakdown.innerHTML = `Score: ${finalScore}/100<br>Frequency: ${freqScore.toFixed(1)}/40 | Allignment: ${distScore.toFixed(1)}/30 | Form: ${elbowScore.toFixed(1)}/30`;
-      improveScore.appendChild(breakdown);
-    }
-
-    function createConfetti() {
-      confettiContainer.style.display = "block";
-      const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff'];
-      
-      for (let i = 0; i < 150; i++) {
-        const confetti = document.createElement('div');
-        confetti.style.position = 'absolute';
-        confetti.style.width = '10px';
-        confetti.style.height = '10px';
-        confetti.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
-        confetti.style.borderRadius = Math.random() > 0.5 ? '50%' : '0';
-        confetti.style.left = Math.random() * 100 + 'vw';
-        confetti.style.top = '-10px';
-        confetti.style.opacity = '0.8';
-        
-        const animation = confetti.animate([
-          { transform: `translateY(0) rotate(0deg)`, opacity: 1 },
-          { transform: `translateY(100vh) rotate(${Math.random() * 360}deg)`, opacity: 0 }
-        ], {
-          duration: 2000 + Math.random() * 3000,
-          easing: 'cubic-bezier(0.1, 0.2, 0.8, 0.9)'
-        });
-        
-        confettiContainer.appendChild(confetti);
-        
-        animation.onfinish = () => {
-          confetti.remove();
-        };
-      }
-      
-      // Hide confetti container after animation
-      setTimeout(() => {
-        confettiContainer.style.display = "none";
-        confettiContainer.innerHTML = "";
-      }, 5000);
-    }
-
-    function drawVideo(){
-      ctx.clearRect(0,0,canvas.width,canvas.height);
-      ctx.drawImage(video,0,0,canvas.width,canvas.height);
-
-      if(window.latestKeypoints){
-        const keypoints = window.latestKeypoints;
-        keypoints.forEach(k=>{
-          if(k.score>0.4 && !faceParts.includes(k.name)){
-            ctx.beginPath(); ctx.arc(k.x,k.y,5,0,2*Math.PI);
-            ctx.fillStyle="white"; ctx.fill();
-          }
-        });
-        skeleton.forEach(([a,b])=>{
-          const kp1=keypoints.find(k=>k.name===a), kp2=keypoints.find(k=>k.name===b);
-          if(kp1?.score>0.4 && kp2?.score>0.4){
-            ctx.beginPath(); ctx.moveTo(kp1.x,kp1.y); ctx.lineTo(kp2.x,kp2.y);
-            ctx.strokeStyle="pink"; ctx.lineWidth=2; ctx.stroke();
-          }
-        });
-      }
-      requestAnimationFrame(drawVideo);
-    }
-
-    async function runDetection(){
-      if(!detector || !testActive) return;
-      const poses=await detector.estimatePoses(video);
-      if(poses.length){
-        const k=poses[0].keypoints;
-        window.latestKeypoints=k;
-
-        // Wrist dribble detection
-        ["left","right"].forEach(side=>{
-          const wrist=k.find(pt=>pt.name===side+"_wrist");
-          if(wrist && wrist.score>0.4){
-            if(lastWristY[side]!==null && (wrist.y-lastWristY[side])>20){
-              dribbleCount++;
+    // Wrist dribble detection
+    ["left","right"].forEach(side=>{
+      const wrist=k.find(pt=>pt.name===side+"_wrist");
+      if(wrist && wrist.score>0.4){
+        if(lastWristY[side]!==null && (wrist.y-lastWristY[side])>20){
+          dribbleCount++;
+          
+          // Check form at the moment of dribble
+          const shoulder=k.find(pt=>pt.name===side+"_shoulder"),
+                elbow=k.find(pt=>pt.name===side+"_elbow");
+          
+          if(shoulder && elbow && wrist && 
+             [shoulder, elbow, wrist].every(p=>p.score>0.4)){
+            let ang=angle(shoulder, elbow, wrist);
+            if(ang>=72 && ang<=108) {
+              goodFormDribbles++;
             }
-            lastWristY[side]=wrist.y;
-          }
-        });
-
-        // Distance wrists to hips
-        const leftWrist=k.find(pt=>pt.name==="left_wrist"),
-              rightWrist=k.find(pt=>pt.name==="right_wrist"),
-              leftHip=k.find(pt=>pt.name==="left_hip"),
-              rightHip=k.find(pt=>pt.name==="right_hip");
-
-        if(leftHip?.score>0.4 || rightHip?.score>0.4) {
-          hipVisible = true; // at least one hip detected
-          if(leftWrist?.score>0.4 && leftHip?.score>0.4){
-            distSum+=Math.abs(leftWrist.x-leftHip.x)/100; distCount++;
-          }
-          if(rightWrist?.score>0.4 && rightHip?.score>0.4){
-            distSum+=Math.abs(rightWrist.x-rightHip.x)/100; distCount++;
           }
         }
-
-        // Elbow angle check
-        const leftShoulder=k.find(pt=>pt.name==="left_shoulder"),
-              rightShoulder=k.find(pt=>pt.name==="right_shoulder"),
-              leftElbow=k.find(pt=>pt.name==="left_elbow"),
-              rightElbow=k.find(pt=>pt.name==="right_elbow");
-        if(leftShoulder&&leftElbow&&leftWrist&&[leftShoulder,leftElbow,leftWrist].every(p=>p.score>0.4)){
-          let ang=angle(leftShoulder,leftElbow,leftWrist);
-          if(ang>=72 && ang<=108) elbowGoodFrames++;
-        }
-        if(rightShoulder&&rightElbow&&rightWrist&&[rightShoulder,rightElbow,rightWrist].every(p=>p.score>0.4)){
-          let ang=angle(rightShoulder,rightElbow,rightWrist);
-          if(ang>=72 && ang<=108) elbowGoodFrames++;
-        }
-        totalFrames++;
+        lastWristY[side]=wrist.y;
       }
-    }
-
-    function tryStartApp() {
-      if(modelReady && videoDone) {
-        loader.style.display = "none";
-        app.style.display = "block";
-        videoContainer.style.display = "block";
-        requestAnimationFrame(drawVideo);
-        detectionLoop = setInterval(runDetection, 150);
-      }
-    }
-
-    // Loading optimization
-    loadingVideo.addEventListener("ended", () => {
-      videoDone = true;
-      tryStartApp();
     });
 
-    // Fallback if video doesn't load
-    setTimeout(() => {
-      if (!videoDone && !modelReady) {
-        document.querySelector('.loading-text').textContent = "Loading taking longer than expected...";
-      }
-    }, 8000);
+    // Distance wrists to hips
+    const leftWrist=k.find(pt=>pt.name==="left_wrist"),
+          rightWrist=k.find(pt=>pt.name==="right_wrist"),
+          leftHip=k.find(pt=>pt.name==="left_hip"),
+          rightHip=k.find(pt=>pt.name==="right_hip");
 
-    // Start initialization
-    init();
+    if(leftHip?.score>0.4 || rightHip?.score>0.4) {
+      hipVisible = true; // at least one hip detected
+      if(leftWrist?.score>0.4 && leftHip?.score>0.4){
+        distSum+=Math.abs(leftWrist.x-leftHip.x)/100; distCount++;
+      }
+      if(rightWrist?.score>0.4 && rightHip?.score>0.4){
+        distSum+=Math.abs(rightWrist.x-rightHip.x)/100; distCount++;
+      }
+    }
+  }
+}
+
+function tryStartApp() {
+  if(modelReady && videoDone) {
+    loader.style.display = "none";
+    app.style.display = "block";
+    videoContainer.style.display = "block";
+    requestAnimationFrame(drawVideo);
+    detectionLoop = setInterval(runDetection, 150);
+  }
+}
+
+// Loading optimization
+video.onloadeddata = () => {
+  videoDone = true;
+  tryStartApp();
+};
+
+// Fallback if video doesn't load
+setTimeout(() => {
+  if (!modelReady) {
+    document.querySelector('.loading-text').textContent = "Loading taking longer than expected...";
+  }
+}, 10000);
+
+// Start initialization
+init();
   </script>
 </body>
 </html>
