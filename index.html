@@ -57,8 +57,8 @@
             <ul>
                 <li>Allow camera access when prompted</li>
                 <li>Stand facing the camera with your full body visible</li>
-                <li>Perform squats by bending your knees and lowering your hips</li>
-                <li>Return to standing position to count a repetition</li>
+                <li>keep your gaurd up</li>
+                <li>dribble with consistency</li>
                 <li>Make sure you have good lighting for better detection</li>
             </ul>
         </div>
@@ -76,7 +76,8 @@
       <video id="video" autoplay playsinline muted></video>
       <canvas id="canvas"></canvas>
     </div>
-    <button onclick="startTest()">Start Test</button>
+    <button class = "start" onclick="startTest()">Start Test</button>
+    <button id = "done" style="display:none">home</button>
     <div class="counter" id="status">Press "Start Test" to begin</div>
     
     <!-- Score displays -->
@@ -102,7 +103,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
   <script>
-   const video = document.getElementById("video"),
+  const video = document.getElementById("video"),
       canvas = document.getElementById("canvas"),
       ctx = canvas.getContext("2d"),
       statusEl = document.getElementById("status"),
@@ -114,10 +115,11 @@
       excellentScore = document.getElementById("excellent-score"),
       goodScore = document.getElementById("good-score"),
       improveScore = document.getElementById("improve-score");
+const startAgainBtn = document.getElementById("done");
 
 let detector, testActive = false, countdownTimer, detectionLoop;
 let modelReady = false, videoDone = false;
-let timeLeft = 30;
+let timeLeft = 20;
 
 // Metrics tracking
 let dribbleCount = 0;
@@ -185,7 +187,7 @@ function startTest() {
 
 function beginMainTest() {
   testActive = true;
-  timeLeft = 30;
+  timeLeft = 20;
 
   // Reset metrics
   dribbleCount = 0;
@@ -212,11 +214,12 @@ function beginMainTest() {
 function stopCamera() {
   const tracks = video.srcObject?.getTracks();
   if (tracks) tracks.forEach(track => track.stop());
+  startAgainBtn.style.display="block";
 }
 
 function showFinalScore() {
   // Frequency score (max 40)
-  let freqScore = Math.min(40, (dribbleCount/70)*40);
+  let freqScore = Math.min(40, (dribbleCount/45)*40);
 
   // Distance score (max 30) – if no hip visible, score = 0
   let distScore = 0;
@@ -249,8 +252,9 @@ function showExcellentScore(finalScore, freqScore, distScore, formScore) {
   createConfetti();
   
   // Update button to "Home"
-  const startAgainBtn = document.getElementById("start-again");
   if (startAgainBtn) {
+    const startButton = document.getElementsByClassName("start")[0];
+    if (startButton) startButton.style.display = "none";
     startAgainBtn.textContent = "Home";
     startAgainBtn.onclick = () => {
       window.location.href = "basketball_tests.html";
@@ -271,8 +275,9 @@ function showGoodScore(finalScore, freqScore, distScore, formScore) {
   goodScore.style.display = "block";
   
   // Update button to "Home"
-  const startAgainBtn = document.getElementById("start-again");
   if (startAgainBtn) {
+    const startButton = document.getElementsByClassName("start")[0];
+    if (startButton) startButton.style.display = "none";
     startAgainBtn.textContent = "Home";
     startAgainBtn.onclick = () => {
       window.location.href = "basketball_tests.html";
@@ -293,8 +298,9 @@ function showImproveScore(finalScore, freqScore, distScore, formScore) {
   improveScore.style.display = "block";
   
   // Update button to "Home"
-  const startAgainBtn = document.getElementById("start-again");
   if (startAgainBtn) {
+    const startButton = document.getElementsByClassName("start")[0];
+    if (startButton) startButton.style.display = "none";
     startAgainBtn.textContent = "Home";
     startAgainBtn.onclick = () => {
       window.location.href = "basketball_tests.html";
